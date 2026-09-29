@@ -1,1536 +1,925 @@
-/* =========================================================
-   E-CARE WEBSITE
-   Student Serial starts from 1000
-   Registration Number is unique locally
-   ========================================================= */
+import {
+  initializeApp
+} from "https://www.gstatic.com/firebasejs/12.2.1/firebase-app.js";
 
-const $ = selector => document.querySelector(selector);
+import {
+  getFirestore,
+  doc,
+  getDoc,
+  setDoc,
+  updateDoc,
+  collection,
+  query,
+  where,
+  getDocs,
+  runTransaction,
+  increment
+} from "https://www.gstatic.com/firebasejs/12.2.1/firebase-firestore.js";
 
-const $$ = selector => document.querySelectorAll(selector);
+import {
+  getFunctions,
+  httpsCallable
+} from "https://www.gstatic.com/firebasejs/12.2.1/firebase-functions.js";
 
+/* =====================================================
+   FIREBASE CONFIG
+   নিজের Firebase Project-এর config এখানে বসাতে হবে
+===================================================== */
 
-/* =========================
-   BASIC SETTINGS
-========================= */
-
-const PAYMENT_NUMBER = "01797937668";
-
-const WHATSAPP_NUMBER = "8801745221602";
-
-const WHATSAPP_MESSAGE =
-  "ধন্যবাদ স্যার আপনার রেজিস্ট্রেশন কমপ্লিট হয়েছে। " +
-  "আপনার ক্লাসের সময় আমাদের অফিসিয়াল হোয়াটসঅ্যাপ এর মাধ্যমে জানিয়ে দেয়া হবে। " +
-  "ধন্যবাদ";
-
-
-/* =========================
-   STORAGE HELPERS
-========================= */
-
-function loadArray(key){
-
-  try{
-
-    return JSON.parse(
-      localStorage.getItem(key) || "[]"
-    );
-
-  }catch(error){
-
-    return [];
-
-  }
-
-}
-
-
-function loadObject(key){
-
-  try{
-
-    return JSON.parse(
-      localStorage.getItem(key) || "null"
-    );
-
-  }catch(error){
-
-    return null;
-
-  }
-
-}
-
-
-/* =========================
-   STATE
-========================= */
-
-const state = {
-
-  students:
-    loadArray("ecare_students"),
-
-  purchases:
-    loadArray("ecare_purchases"),
-
-  next:
-    1000,
-
-  verified:
-    loadObject("ecare_verified")
-
+const firebaseConfig = {
+  apiKey: "YOUR_FIREBASE_API_KEY",
+  authDomain: "YOUR_PROJECT.firebaseapp.com",
+  projectId: "YOUR_PROJECT_ID",
+  storageBucket: "YOUR_PROJECT.firebasestorage.app",
+  messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+  appId: "YOUR_FIREBASE_APP_ID"
 };
 
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+const functions = getFunctions(app);
 
-/* =========================
-   SERIAL SYSTEM
-========================= */
+/* =====================================================
+   CONSTANTS
+===================================================== */
 
-function extractSerial(id){
+const REGISTRATION_FEE = 30;
 
-  const match = String(id || "")
-    .match(/EC-2026-(\d+)/i);
+const PAYMENT_NUMBER = "01797937668";
+const WHATSAPP_NUMBER = "8801745221602";
 
-  return match
-    ? Number(match[1])
-    : 0;
+const COURSES = {
+  "ai-web-development": {
+    name: "AI Web Development",
+    price: 1200
+  },
 
-}
+  "graphic-design": {
+    name: "Graphic Design",
+    price: 1000
+  },
 
+  "digital-marketing": {
+    name: "Digital Marketing",
+    price: 1000
+  },
 
-function maxUsedSerial(){
-
-  return [
-
-    ...state.students,
-
-    ...state.purchases
-
-  ].reduce(
-
-    (max,item) =>
-      Math.max(
-        max,
-        extractSerial(item.id)
-      ),
-
-    999
-
-  );
-
-}
-
-
-const savedNext =
-  Number(
-    localStorage.getItem(
-      "ecare_next_serial"
-    ) || 1000
-  );
-
-
-state.next =
-  Math.max(
-    1000,
-    savedNext,
-    maxUsedSerial() + 1
-  );
-
-
-/* =========================
-   SAVE DATA
-========================= */
-
-function save(){
-
-  localStorage.setItem(
-    "ecare_students",
-    JSON.stringify(state.students)
-  );
-
-  localStorage.setItem(
-    "ecare_purchases",
-    JSON.stringify(state.purchases)
-  );
-
-  localStorage.setItem(
-    "ecare_next_serial",
-    String(state.next)
-  );
-
-  localStorage.setItem(
-    "ecare_verified",
-    JSON.stringify(state.verified)
-  );
-
-}
-
-
-/* =========================
-   LOGIN
-========================= */
-
-function getLoggedIn(){
-
-  return loadObject(
-    "ecare_logged_in"
-  );
-
-}
-
-
-function setLoggedIn(student){
-
-  if(student){
-
-    localStorage.setItem(
-      "ecare_logged_in",
-      JSON.stringify(student)
-    );
-
-  }else{
-
-    localStorage.removeItem(
-      "ecare_logged_in"
-    );
-
+  "video-editing": {
+    name: "Video Editing",
+    price: 800
   }
+};
 
-}
+/*
+  Registration-এর পর এই দুইটি course automatically free.
+*/
+const REGISTRATION_FREE_COURSES = [
+  "ai-web-development",
+  "digital-marketing"
+];
 
+/* =====================================================
+   BANGLADESH DIVISION / DISTRICT
+===================================================== */
 
-/* =========================
-   ACCOUNT UI
-========================= */
+const divisions = {
 
-function updateAccountUI(){
+  "ঢাকা": [
+    "ঢাকা","গাজীপুর","নারায়ণগঞ্জ","নরসিংদী",
+    "টাঙ্গাইল","কিশোরগঞ্জ","মানিকগঞ্জ","মুন্সিগঞ্জ",
+    "মাদারীপুর","রাজবাড়ী","শরীয়তপুর","ফরিদপুর","গোপালগঞ্জ"
+  ],
 
-  const student =
-    getLoggedIn();
+  "চট্টগ্রাম": [
+    "চট্টগ্রাম","কক্সবাজার","কুমিল্লা","ব্রাহ্মণবাড়িয়া",
+    "চাঁদপুর","ফেনী","খাগড়াছড়ি","লক্ষ্মীপুর",
+    "নোয়াখালী","রাঙ্গামাটি","বান্দরবান"
+  ],
 
-  const button =
-    $("#registerTopBtn");
+  "রাজশাহী": [
+    "রাজশাহী","বগুড়া","জয়পুরহাট","নওগাঁ",
+    "নাটোর","চাঁপাইনবাবগঞ্জ","পাবনা","সিরাজগঞ্জ"
+  ],
 
-  if(!button) return;
+  "খুলনা": [
+    "খুলনা","বাগেরহাট","চুয়াডাঙ্গা","যশোর",
+    "ঝিনাইদহ","কুষ্টিয়া","মাগুরা","মেহেরপুর",
+    "নড়াইল","সাতক্ষীরা"
+  ],
 
+  "বরিশাল": [
+    "বরিশাল","ভোলা","ঝালকাঠি","পটুয়াখালী",
+    "পিরোজপুর","বরগুনা"
+  ],
 
-  if(student){
+  "সিলেট": [
+    "সিলেট","মৌলভীবাজার","হবিগঞ্জ","সুনামগঞ্জ"
+  ],
 
-    button.textContent =
-      student.id;
+  "রংপুর": [
+    "রংপুর","দিনাজপুর","গাইবান্ধা","কুড়িগ্রাম",
+    "লালমনিরহাট","নীলফামারী","পঞ্চগড়","ঠাকুরগাঁও"
+  ],
 
-    button.classList.add(
-      "logged-in"
-    );
+  "ময়মনসিংহ": [
+    "ময়মনসিংহ","জামালপুর","নেত্রকোনা","শেরপুর"
+  ]
+};
 
-    button.title =
-      "Student Account / Logout";
+/* =====================================================
+   DOM
+===================================================== */
 
-  }else{
+const $ = id => document.getElementById(id);
 
-    button.textContent =
-      "👤 Registration";
+const registrationModal = $("registrationModal");
+const coursePaymentModal = $("coursePaymentModal");
+const loginModal = $("loginModal");
+const accountMenu = $("accountMenu");
 
-    button.classList.remove(
-      "logged-in"
-    );
+let currentStudent = null;
+let selectedCourse = null;
+let selectedPaymentMethod = "bkash";
+let selectedCoursePaymentMethod = "bkash";
 
-    button.title =
-      "Registration";
-
-  }
-
-}
-
-
-/* =========================
-   MODALS
-========================= */
-
-function openModal(id){
-
-  const modal =
-    $("#" + id);
-
-  if(modal){
-
-    modal.classList.add(
-      "show"
-    );
-
-  }
-
-}
-
-
-function closeModals(){
-
-  $$(".modal")
-    .forEach(
-      modal =>
-        modal.classList.remove(
-          "show"
-        )
-    );
-
-}
-
-
-$$(".close").forEach(button => {
-
-  button.addEventListener(
-    "click",
-    closeModals
-  );
-
-});
-
-
-$$(".modal").forEach(modal => {
-
-  modal.addEventListener(
-    "click",
-    event => {
-
-      if(
-        event.target === modal
-      ){
-
-        modal.classList.remove(
-          "show"
-        );
-
-      }
-
-    }
-  );
-
-});
-
-
-/* =========================
+/* =====================================================
    TOAST
-========================= */
+===================================================== */
 
 function toast(message){
 
-  const element =
-    $("#toast");
+  const el = $("toast");
 
-  element.textContent =
-    message;
+  el.textContent = message;
+  el.classList.add("show");
 
-  element.classList.add(
-    "show"
-  );
-
-  setTimeout(
-    () =>
-      element.classList.remove(
-        "show"
-      ),
-    3000
-  );
-
+  setTimeout(() => {
+    el.classList.remove("show");
+  }, 2800);
 }
 
+/* =====================================================
+   MODAL
+===================================================== */
 
-/* =========================
-   WHATSAPP
-========================= */
-
-function openWhatsApp(message){
-
-  const url =
-    `https://wa.me/${WHATSAPP_NUMBER}?text=${
-      encodeURIComponent(message)
-    }`;
-
-  window.open(
-    url,
-    "_blank"
-  );
-
+function openModal(modal){
+  modal.classList.remove("hidden");
 }
 
-
-/* =========================
-   HEADER BUTTONS
-========================= */
-
-$("#registerTopBtn").onclick =
-  () => {
-
-    const loggedIn =
-      getLoggedIn();
-
-    if(loggedIn){
-
-      $("#accountStudentId")
-        .textContent =
-        loggedIn.id;
-
-      $("#accountRegistrationNo")
-        .textContent =
-        loggedIn.registrationNumber || "—";
-
-      openModal(
-        "accountModal"
-      );
-
-    }else{
-
-      openModal(
-        "registerModal"
-      );
-
-    }
-
-  };
-
-
-$("#verifyTopBtn").onclick =
-  () =>
-    openModal(
-      "verifyModal"
-    );
-
-
-$("#infoWaBtn").onclick =
-  () =>
-    openWhatsApp(
-      WHATSAPP_MESSAGE
-    );
-
-
-$("#footerVerify").onclick =
-  event => {
-
-    event.preventDefault();
-
-    openModal(
-      "verifyModal"
-    );
-
-  };
-
-
-$("#footerContact").onclick =
-  event => {
-
-    event.preventDefault();
-
-    openWhatsApp(
-      WHATSAPP_MESSAGE
-    );
-
-  };
-
-
-/* =========================
-   SERIAL DISPLAY
-========================= */
-
-function updateSerialDisplay(){
-
-  const next =
-    state.next;
-
-  const top =
-    $("#serialTop");
-
-  const hero =
-    $("#serialHero");
-
-  if(top)
-    top.textContent =
-      next;
-
-  if(hero)
-    hero.textContent =
-      next;
-
+function closeModal(modal){
+  modal.classList.add("hidden");
 }
 
+document.querySelectorAll("[data-close]").forEach(btn => {
 
-updateSerialDisplay();
+  btn.addEventListener("click", () => {
+    closeModal($(btn.dataset.close));
+  });
 
+});
 
-/* =========================
-   UNIQUE RANDOM CODE
-========================= */
+/* =====================================================
+   DIVISION / DISTRICT
+===================================================== */
 
-function randomCode(){
+Object.keys(divisions).forEach(division => {
 
-  if(
-    window.crypto &&
-    window.crypto.getRandomValues
-  ){
+  const option = document.createElement("option");
 
-    const array =
-      new Uint32Array(1);
+  option.value = division;
+  option.textContent = division;
 
-    window.crypto.getRandomValues(
-      array
-    );
+  $("division").appendChild(option);
 
-    return array[0]
-      .toString(36)
-      .slice(-5)
-      .toUpperCase()
-      .padStart(5,"0");
+});
 
-  }
+$("division").addEventListener("change", () => {
 
+  const selected = $("division").value;
 
-  return Math.random()
-    .toString(36)
-    .slice(2,7)
-    .toUpperCase();
+  $("district").innerHTML =
+    `<option value="">জেলা নির্বাচন করুন</option>`;
 
-}
+  if(!selected) return;
 
+  divisions[selected].forEach(district => {
 
-/* =========================
-   UNIQUE REGISTRATION NUMBER
-========================= */
+    const option = document.createElement("option");
 
-function makeRegistrationNumber(
-  serial
-){
+    option.value = district;
+    option.textContent = district;
 
-  let number;
-
-  do{
-
-    number =
-      `REG-2026-${String(serial)
-        .padStart(4,"0")}-${randomCode()}`;
-
-  }while(
-
-    state.students.some(
-      student =>
-        student.registrationNumber === number
-    )
-
-    ||
-
-    state.purchases.some(
-      purchase =>
-        purchase.registrationNumber === number
-    )
-
-  );
-
-
-  return number;
-
-}
-
-
-/* =========================
-   UNIQUE STUDENT ID
-========================= */
-
-function makeStudentId(){
-
-  while(true){
-
-    const serial =
-      state.next;
-
-    state.next++;
-
-    const id =
-      `EC-2026-${String(serial)
-        .padStart(7,"0")}`;
-
-
-    const alreadyUsed =
-      state.students.some(
-        student =>
-          student.id === id
-      )
-
-      ||
-
-      state.purchases.some(
-        purchase =>
-          purchase.id === id
-      );
-
-
-    if(!alreadyUsed){
-
-      return {
-        id,
-        serial
-      };
-
-    }
-
-  }
-
-}
-
-
-/* =========================
-   REGISTRATION STEP SYSTEM
-========================= */
-
-$$(".next-step")
-  .forEach(button => {
-
-    button.onclick =
-      () => {
-
-        const name =
-          $("#regName").value.trim();
-
-        const phone =
-          $("#regPhone").value.trim();
-
-        if(!name){
-
-          toast(
-            "আপনার পূর্ণ নাম দিন।"
-          );
-
-          return;
-
-        }
-
-
-        if(!phone){
-
-          toast(
-            "আপনার মোবাইল নম্বর দিন।"
-          );
-
-          return;
-
-        }
-
-
-        $("[data-step='1']")
-          .classList
-          .remove("active");
-
-        $("[data-step='2']")
-          .classList
-          .add("active");
-
-
-        $$(".progress span")
-          .forEach(
-            span =>
-              span.classList.remove(
-                "active"
-              )
-          );
-
-        $$(".progress span")[1]
-          .classList
-          .add("active");
-
-      };
+    $("district").appendChild(option);
 
   });
 
+});
 
-$(".back-step").onclick =
-  () => {
+/* =====================================================
+   REGISTRATION OPEN
+===================================================== */
 
-    $("[data-step='2']")
-      .classList
-      .remove("active");
+$("registerBtn").addEventListener("click", () => {
 
-    $("[data-step='1']")
-      .classList
-      .add("active");
+  if(currentStudent){
 
-    $$(".progress span")
-      .forEach(
-        span =>
-          span.classList.remove(
-            "active"
-          )
-      );
+    toast(
+      `আপনার Registration ID: ${currentStudent.registrationId}`
+    );
 
-    $$(".progress span")[0]
-      .classList
-      .add("active");
+    return;
+  }
 
-  };
+  resetRegistration();
 
+  openModal(registrationModal);
 
-/* =========================
-   REGISTRATION
-========================= */
+});
 
-$("#regForm").onsubmit =
-  event => {
+/* =====================================================
+   REGISTRATION FORM
+===================================================== */
 
-    event.preventDefault();
+$("registrationForm").addEventListener("submit", async event => {
 
+  event.preventDefault();
 
-    const name =
-      $("#regName")
-        .value
-        .trim();
+  const name = $("name").value.trim();
+  const division = $("division").value;
+  const district = $("district").value;
+  const mobile = $("mobile").value.trim();
+  const gmail = $("gmail").value.trim().toLowerCase();
 
-    const phone =
-      $("#regPhone")
-        .value
-        .trim();
+  if(!name || !division || !district || !mobile || !gmail){
 
-    const email =
-      $("#regEmail")
-        .value
-        .trim();
+    toast("সব তথ্য পূরণ করুন।");
+    return;
+  }
 
-    const course =
-      $("#regCourse")
-        .value;
+  if(!/^01[3-9]\d{8}$/.test(mobile)){
 
-    const transactionId =
-      $("#txId")
-        .value
-        .trim();
+    toast("সঠিক ১১ সংখ্যার মোবাইল নম্বর দিন।");
+    return;
+  }
 
+  if(!gmail.endsWith("@gmail.com")){
 
-    if(
-      !name ||
-      !phone ||
-      !transactionId
-    ){
+    toast("সঠিক Gmail address দিন।");
+    return;
+  }
 
-      toast(
-        "সব প্রয়োজনীয় তথ্য পূরণ করুন।"
-      );
+  /*
+    Temporary registration data.
+    Final student record is created ONLY after backend
+    confirms the ৳30 payment.
+  */
 
-      return;
+  sessionStorage.setItem(
+    "pendingRegistration",
+    JSON.stringify({
+      name,
+      division,
+      district,
+      mobile,
+      gmail
+    })
+  );
+
+  $("registrationStep1").classList.add("hidden");
+  $("registrationStep2").classList.remove("hidden");
+
+});
+
+/* =====================================================
+   PAYMENT METHOD
+===================================================== */
+
+document.querySelectorAll(".method").forEach(btn => {
+
+  btn.addEventListener("click", () => {
+
+    const group = btn.dataset.method
+      ? "registration"
+      : "course";
+
+    if(group === "registration"){
+
+      selectedPaymentMethod = btn.dataset.method;
+
+      document
+        .querySelectorAll(".method")
+        .forEach(x => x.classList.remove("active"));
+
+      btn.classList.add("active");
 
     }
 
+  });
 
-    const student =
-      makeStudentId();
+});
 
+document.querySelectorAll("[data-course-method]").forEach(btn => {
 
-    const registrationNumber =
-      makeRegistrationNumber(
-        student.serial
-      );
+  btn.addEventListener("click", () => {
 
+    selectedCoursePaymentMethod =
+      btn.dataset.courseMethod;
 
-    const record = {
+    document
+      .querySelectorAll("[data-course-method]")
+      .forEach(x => x.classList.remove("active"));
 
-      id:
-        student.id,
+    btn.classList.add("active");
 
-      registrationNumber:
+  });
 
-        registrationNumber,
+});
 
-      serial:
-        student.serial,
+/* =====================================================
+   COPY PAYMENT NUMBER
+===================================================== */
 
-      name:
-        name,
+$("copyRegistrationNumber").addEventListener("click", async () => {
 
-      phone:
-        phone,
+  await navigator.clipboard.writeText(PAYMENT_NUMBER);
 
-      email:
-        email,
+  toast("Number Copied");
 
-      course:
-        course,
+});
 
-      tx:
-        transactionId,
+$("copyCourseNumber").addEventListener("click", async () => {
 
-      paid:
-        30,
+  await navigator.clipboard.writeText(PAYMENT_NUMBER);
 
-      registration:
-        true,
+  toast("Number Copied");
 
-      createdAt:
-        new Date().toISOString()
+});
 
-    };
+/* =====================================================
+   REGISTRATION PAYMENT
+===================================================== */
 
+$("registrationPayBtn").addEventListener("click", async () => {
 
-    state.students.push(
-      record
+  const txn = $("registrationTxn").value.trim();
+
+  if(!txn){
+
+    toast("Transaction ID দিন।");
+    return;
+  }
+
+  const pending =
+    JSON.parse(
+      sessionStorage.getItem("pendingRegistration") || "null"
     );
 
-    state.verified =
-      record;
+  if(!pending){
 
+    toast("Registration session পাওয়া যায়নি।");
+    return;
+  }
 
-    save();
+  const button = $("registrationPayBtn");
 
-    updateSerialDisplay();
+  button.disabled = true;
+  button.textContent = "Verifying...";
 
+  try{
 
-    $("#newStudentId")
-      .textContent =
-      record.id;
+    /*
+      SECURITY:
+      Transaction verification happens in Firebase
+      Cloud Function, not in this public JS file.
+    */
 
-
-    $("#newRegistrationNo")
-      .textContent =
-      record.registrationNumber;
-
-
-    $("#newCourse")
-      .textContent =
-      record.course;
-
-
-    $("[data-step='2']")
-      .classList
-      .remove("active");
-
-    $("#successPane")
-      .classList
-      .add("active");
-
-
-    $$(".progress span")
-      .forEach(
-        span =>
-          span.classList.remove(
-            "active"
-          )
+    const verifyRegistrationPayment =
+      httpsCallable(
+        functions,
+        "verifyRegistrationPayment"
       );
 
-    $$(".progress span")[2]
-      .classList
-      .add("active");
+    const result =
+      await verifyRegistrationPayment({
 
+        paymentMethod: selectedPaymentMethod,
+
+        transactionId: txn,
+
+        amount: REGISTRATION_FEE,
+
+        name: pending.name,
+
+        division: pending.division,
+
+        district: pending.district,
+
+        mobile: pending.mobile,
+
+        gmail: pending.gmail
+
+      });
+
+    if(!result.data || !result.data.success){
+
+      throw new Error(
+        result.data?.message ||
+        "Payment verification failed."
+      );
+    }
+
+    const student = result.data.student;
+
+    currentStudent = student;
+
+    localStorage.setItem(
+      "eCareRegistrationId",
+      student.registrationId
+    );
+
+    sessionStorage.removeItem("pendingRegistration");
+
+    $("successName").textContent =
+      student.name;
+
+    $("successRegistrationId").textContent =
+      student.registrationId;
+
+    $("registrationStep2").classList.add("hidden");
+
+    $("registrationStep3").classList.remove("hidden");
+
+    updateUI();
+
+    toast("Registration Successful");
+
+  }catch(error){
+
+    console.error(error);
 
     toast(
-      "Registration সফল হয়েছে।"
+      error.message ||
+      "Payment verification failed."
     );
 
-  };
+  }finally{
 
+    button.disabled = false;
+    button.textContent = "Verify Payment";
 
-/* =========================
-   SUCCESS VERIFY
-========================= */
+  }
 
-$("#successVerify").onclick =
-  () => {
+});
 
-    const id =
-      $("#newStudentId")
-        .textContent;
+/* =====================================================
+   SUCCESS CONTINUE
+===================================================== */
 
-    closeModals();
+$("successContinue").addEventListener("click", () => {
 
-    $("#modalVerifyId")
-      .value =
-      id;
+  closeModal(registrationModal);
 
-    openModal(
-      "verifyModal"
+  updateUI();
+
+});
+
+/* =====================================================
+   COURSE BUTTONS
+===================================================== */
+
+document.querySelectorAll(".course-btn").forEach(btn => {
+
+  btn.addEventListener("click", async () => {
+
+    const courseId = btn.dataset.course;
+
+    /*
+      Registration ছাড়া কোনো course-এর payment
+      করা যাবে না।
+    */
+
+    if(!currentStudent){
+
+      toast("আগে Registration ID দিয়ে Login করুন।");
+
+      openModal(loginModal);
+
+      return;
+    }
+
+    const course = COURSES[courseId];
+
+    if(!course) return;
+
+    const status =
+      currentStudent.courses?.[courseId];
+
+    if(status === "free"){
+
+      toast("এই কোর্সটি আপনার জন্য Free.");
+
+      return;
+    }
+
+    selectedCourse = courseId;
+
+    $("coursePaymentTitle").textContent =
+      course.name;
+
+    $("coursePaymentPrice").textContent =
+      `Course Fee: ৳${course.price.toLocaleString("en-US")}`;
+
+    $("courseTxn").value = "";
+
+    openModal(coursePaymentModal);
+
+  });
+
+});
+
+/* =====================================================
+   COURSE PAYMENT
+===================================================== */
+
+$("coursePayBtn").addEventListener("click", async () => {
+
+  if(!currentStudent){
+
+    toast("আগে Login করুন।");
+    return;
+  }
+
+  if(!selectedCourse) return;
+
+  const txn = $("courseTxn").value.trim();
+
+  if(!txn){
+
+    toast("Transaction ID দিন।");
+    return;
+  }
+
+  const course = COURSES[selectedCourse];
+
+  const button = $("coursePayBtn");
+
+  button.disabled = true;
+  button.textContent = "Verifying...";
+
+  try{
+
+    const verifyCoursePayment =
+      httpsCallable(
+        functions,
+        "verifyCoursePayment"
+      );
+
+    const result =
+      await verifyCoursePayment({
+
+        registrationId:
+          currentStudent.registrationId,
+
+        courseId:
+          selectedCourse,
+
+        paymentMethod:
+          selectedCoursePaymentMethod,
+
+        transactionId:
+          txn,
+
+        amount:
+          course.price
+
+      });
+
+    if(!result.data || !result.data.success){
+
+      throw new Error(
+        result.data?.message ||
+        "Payment verification failed."
+      );
+    }
+
+    currentStudent =
+      result.data.student;
+
+    localStorage.setItem(
+      "eCareRegistrationId",
+      currentStudent.registrationId
     );
 
-    verifyStudent(
-      id
+    closeModal(coursePaymentModal);
+
+    updateUI();
+
+    toast(`${course.name} এখন Free.`);
+
+  }catch(error){
+
+    console.error(error);
+
+    toast(
+      error.message ||
+      "Payment verification failed."
     );
 
-  };
+  }finally{
 
+    button.disabled = false;
+    button.textContent = "Verify Payment";
 
-/* =========================
-   ESCAPE HTML
-========================= */
+  }
 
-function escapeHTML(value){
+});
 
-  return String(value)
-    .replace(
-      /[&<>"']/g,
-      character => {
+/* =====================================================
+   3 DOT MENU
+===================================================== */
 
-        const map = {
+$("menuBtn").addEventListener("click", () => {
 
-          "&":"&amp;",
-          "<":"&lt;",
-          ">":"&gt;",
-          '"':"&quot;",
-          "'":"&#039;"
+  if(!currentStudent){
 
-        };
+    openModal(loginModal);
 
-        return map[
-          character
-        ];
+    return;
+  }
 
-      }
-    );
+  updateAccountMenu();
 
-}
+  accountMenu.classList.remove("hidden");
 
+});
 
-/* =========================
-   FIND STUDENT
-========================= */
+$("menuClose").addEventListener("click", () => {
 
-function findRecord(
-  input
-){
+  accountMenu.classList.add("hidden");
 
-  const query =
-    String(input || "")
+});
+
+/* =====================================================
+   LOGIN
+===================================================== */
+
+$("loginBtn").addEventListener("click", async () => {
+
+  const registrationId =
+    $("loginRegistrationId")
+      .value
       .trim()
       .toUpperCase();
 
-  if(!query)
-    return null;
+  if(!/^EC\d{5}$/.test(registrationId)){
 
+    toast("সঠিক Registration ID দিন।");
+    return;
+  }
 
-  return [
+  const button = $("loginBtn");
 
-    ...state.students,
+  button.disabled = true;
+  button.textContent = "Checking...";
 
-    ...state.purchases
+  try{
 
-  ].find(
-    record =>
+    const loginStudent =
+      httpsCallable(
+        functions,
+        "loginStudent"
+      );
 
-      String(
-        record.id || ""
-      ).toUpperCase()
-      === query
+    const result =
+      await loginStudent({
+        registrationId
+      });
 
-      ||
+    if(!result.data || !result.data.success){
 
-      String(
-        record.registrationNumber || ""
-      ).toUpperCase()
-      === query
+      throw new Error(
+        result.data?.message ||
+        "Registration ID পাওয়া যায়নি।"
+      );
+    }
 
-  ) || null;
+    currentStudent =
+      result.data.student;
+
+    localStorage.setItem(
+      "eCareRegistrationId",
+      currentStudent.registrationId
+    );
+
+    closeModal(loginModal);
+
+    updateUI();
+
+    toast("Login Successful");
+
+  }catch(error){
+
+    console.error(error);
+
+    toast(
+      "Invalid Registration ID"
+    );
+
+  }finally{
+
+    button.disabled = false;
+    button.textContent = "Login";
+
+  }
+
+});
+
+/* =====================================================
+   ACCOUNT MENU
+===================================================== */
+
+function updateAccountMenu(){
+
+  if(!currentStudent) return;
+
+  $("accountName").textContent =
+    currentStudent.name;
+
+  $("accountRegistrationId").textContent =
+    currentStudent.registrationId;
+
+  $("accountSerial").textContent =
+    currentStudent.serial;
+
+  $("accountTotalStudents").textContent =
+    currentStudent.totalStudents;
 
 }
 
+/* =====================================================
+   LOGOUT
+===================================================== */
 
-/* =========================
-   FREE COURSE
-========================= */
+$("logoutBtn").addEventListener("click", () => {
 
-function setCourseFree(
-  course,
-  lock = false
-){
+  currentStudent = null;
 
-  $$(".course-card")
-    .forEach(card => {
+  localStorage.removeItem(
+    "eCareRegistrationId"
+  );
 
-      const title =
-        card
-          .querySelector("h3")
-          ?.textContent
-          .trim();
+  accountMenu.classList.add("hidden");
 
+  updateUI();
 
-      if(title !== course)
-        return;
+  toast("Logout Successful");
 
+});
 
-      card.classList.add(
-        "free-unlocked"
-      );
+/* =====================================================
+   UPDATE UI
+===================================================== */
 
+function updateUI(){
 
-      if(lock){
+  document.querySelectorAll(".course-btn")
+    .forEach(btn => {
 
-        card.classList.add(
-          "locked"
-        );
+      const courseId = btn.dataset.course;
 
-      }
+      btn.classList.remove("free");
 
+      if(
+        currentStudent &&
+        currentStudent.courses &&
+        currentStudent.courses[courseId] === "free"
+      ){
 
-      const button =
-        card.querySelector(
-          ".course-pay,.tag"
-        );
+        btn.textContent = "Free";
+        btn.classList.add("free");
 
+      }else{
 
-      const price =
-        card.querySelector(
-          ".course-foot>b"
-        );
-
-
-      if(button){
-
-        button.textContent =
-          "Free";
-
-        button.classList.remove(
-          "paid"
-        );
-
-        button.classList.add(
-          "unlocked"
-        );
-
-        button.disabled =
-          true;
-
-      }
-
-
-      if(price){
-
-        price.textContent =
-          "৳ Free";
+        btn.textContent = "Paid";
 
       }
 
     });
 
-}
+  if(currentStudent){
 
+    $("registerBtn").textContent =
+      `ID: ${currentStudent.registrationId}`;
 
-/* =========================
-   VERIFY
-========================= */
-
-function verifyStudent(
-  input
-){
-
-  const record =
-    findRecord(input);
-
-
-  if(!record){
-
-    $("#verifyResult")
-      .innerHTML = `
-
-        <div
-          class="verified"
-          style="
-            color:#b14d32;
-            background:#fff1ed;
-          "
-        >
-
-          ❌ Student ID / Registration Number
-          পাওয়া যায়নি।
-
-        </div>
-
-      `;
-
-    return;
-
-  }
-
-
-  state.verified =
-    record;
-
-  save();
-
-
-  setLoggedIn(
-    record
-  );
-
-  updateAccountUI();
-
-
-  /*
-    Registration verification:
-    AI Web Development এবং
-    Digital Marketing Free + Locked
-  */
-
-  if(
-    record.course &&
-    record.paid !== 30
-  ){
-
-    setCourseFree(
-      record.course
-    );
+    $("whatsappBtn").disabled = false;
 
   }else{
 
-    setCourseFree(
-      "AI Web Development",
-      true
-    );
+    $("registerBtn").textContent =
+      "Registration";
 
-    setCourseFree(
-      "Digital Marketing",
-      true
-    );
+    $("whatsappBtn").disabled = true;
 
   }
 
+}
 
-  const studentId =
-    record.id;
+/* =====================================================
+   RESET REGISTRATION
+===================================================== */
 
-  const registrationNumber =
-    record.registrationNumber ||
-    "—";
+function resetRegistration(){
 
+  $("registrationStep1")
+    .classList.remove("hidden");
 
-  const name =
-    record.name
-      ? `নাম: ${escapeHTML(record.name)}<br>`
-      : `Course: ${escapeHTML(record.course)}<br>`;
+  $("registrationStep2")
+    .classList.add("hidden");
 
+  $("registrationStep3")
+    .classList.add("hidden");
 
-  const whatsappText =
-    WHATSAPP_MESSAGE +
-    "\nStudent ID: " +
-    studentId;
+  $("registrationForm").reset();
 
-
-  $("#verifyResult")
-    .innerHTML = `
-
-      <div class="verified">
-
-        <b>
-          ✓ Verified & Authentic
-        </b>
-
-        <br>
-
-        ${name}
-
-        Student ID:
-        ${escapeHTML(studentId)}
-
-        <br>
-
-        Registration No:
-        ${escapeHTML(registrationNumber)}
-
-        <br>
-
-        <a
-          href="https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(whatsappText)}"
-          target="_blank"
-          rel="noopener"
-        >
-          💬 Official WhatsApp চালু করুন →
-        </a>
-
-      </div>
-
-    `;
-
-
-  toast(
-    "Verification সফল হয়েছে।"
-  );
+  $("registrationTxn").value = "";
 
 }
 
+/* =====================================================
+   WHATSAPP
+===================================================== */
 
-/* =========================
-   VERIFY BUTTONS
-========================= */
+$("whatsappBtn").addEventListener("click", () => {
 
-$("#verifyBtn").onclick =
-  () =>
-    verifyStudent(
-      $("#verifyId").value
+  if(!currentStudent){
+
+    toast("আগে Registration/Login করুন।");
+    return;
+  }
+
+  window.open(
+    `https://wa.me/${WHATSAPP_NUMBER}`,
+    "_blank"
+  );
+
+});
+
+/* =====================================================
+   LOAD EXISTING SESSION
+===================================================== */
+
+async function loadExistingSession(){
+
+  const registrationId =
+    localStorage.getItem(
+      "eCareRegistrationId"
     );
 
-
-$("#verifyBtn2").onclick =
-  () =>
-    verifyStudent(
-      $("#verifyId2").value
-    );
-
-
-$("#modalVerifyBtn").onclick =
-  () =>
-    verifyStudent(
-      $("#modalVerifyId").value
-    );
-
-
-/* =========================
-   COURSE PAYMENT
-========================= */
-
-$$(".course-pay")
-  .forEach(button => {
-
-    button.onclick =
-      () => {
-
-        if(button.disabled)
-          return;
-
-
-        $("#purchaseTitle")
-          .textContent =
-          button.dataset.course;
-
-
-        $("#purchasePrice")
-          .textContent =
-          "৳ " +
-          Number(
-            button.dataset.price
-          ).toLocaleString("en-US");
-
-
-        $("#coursePayConfirm")
-          .dataset.course =
-          button.dataset.course;
-
-
-        $("#coursePayConfirm")
-          .dataset.price =
-          button.dataset.price;
-
-
-        $("#coursePayResult")
-          .innerHTML =
-          "";
-
-
-        $("#courseTxId")
-          .value =
-          "";
-
-
-        openModal(
-          "purchaseModal"
-        );
-
-      };
-
-  });
-
-
-/* =========================
-   COURSE PAYMENT SUBMIT
-========================= */
-
-$("#coursePayConfirm").onclick =
-  () => {
-
-    const transactionId =
-      $("#courseTxId")
-        .value
-        .trim();
-
-
-    if(!transactionId){
-
-      toast(
-        "Send Money করার পরে Transaction ID দিন।"
-      );
-
-      return;
-
-    }
-
-
-    const course =
-      $("#coursePayConfirm")
-        .dataset.course;
-
-
-    const price =
-      Number(
-        $("#coursePayConfirm")
-          .dataset.price
-      );
-
-
-    const student =
-      makeStudentId();
-
-
-    const registrationNumber =
-      makeRegistrationNumber(
-        student.serial
-      );
-
-
-    const purchase = {
-
-      id:
-        student.id,
-
-      registrationNumber:
-        registrationNumber,
-
-      serial:
-        student.serial,
-
-      course:
-        course,
-
-      price:
-        price,
-
-      tx:
-        transactionId,
-
-      paid:
-        true,
-
-      createdAt:
-        new Date().toISOString()
-
-    };
-
-
-    state.purchases.push(
-      purchase
-    );
-
-
-    save();
-
-    updateSerialDisplay();
-
-
-    $("#coursePayResult")
-      .innerHTML = `
-
-        <div class="verified">
-
-          <b>
-            ✓ Payment Submitted
-          </b>
-
-          <br>
-
-          Student ID:
-          <strong>
-            ${escapeHTML(student.id)}
-          </strong>
-
-          <br>
-
-          Registration No:
-          <strong>
-            ${escapeHTML(registrationNumber)}
-          </strong>
-
-          <br>
-
-          Course:
-          ${escapeHTML(course)}
-
-          <br>
-
-          Paid:
-          ৳${price.toLocaleString("en-US")}
-
-          <br><br>
-
-          এই Student ID অথবা
-          Registration Number
-          Verify & Login-এ দিন।
-
-        </div>
-
-      `;
-
-
-    toast(
-      "Student ID তৈরি হয়েছে।"
-    );
-
-  };
-
-
-/* =========================
-   ACCOUNT WHATSAPP
-========================= */
-
-$("#accountWhatsapp").onclick =
-  () => {
-
-    const student =
-      getLoggedIn();
-
-    if(!student)
-      return;
-
-
-    openWhatsApp(
-
-      WHATSAPP_MESSAGE +
-      "\nStudent ID: " +
-      student.id
-
-    );
-
-  };
-
-
-/* =========================
-   LOGOUT
-========================= */
-
-$("#logoutBtn").onclick =
-  () => {
-
-    setLoggedIn(
-      null
-    );
-
-    state.verified =
-      null;
-
-    save();
-
-    updateAccountUI();
-
-    closeModals();
-
-
-    toast(
-      "Student account থেকে Logout করা হয়েছে।"
-    );
-
-  };
-
-
-/* =========================
-   COPY PAYMENT NUMBER
-========================= */
-
-async function copyPaymentNumber(){
+  if(!registrationId) return;
 
   try{
 
-    await navigator
-      .clipboard
-      .writeText(
-        PAYMENT_NUMBER
+    const loginStudent =
+      httpsCallable(
+        functions,
+        "loginStudent"
       );
 
-    toast(
-      "Payment নম্বর কপি হয়েছে।"
-    );
+    const result =
+      await loginStudent({
+        registrationId
+      });
+
+    if(result.data?.success){
+
+      currentStudent =
+        result.data.student;
+
+      updateUI();
+
+    }else{
+
+      localStorage.removeItem(
+        "eCareRegistrationId"
+      );
+
+    }
 
   }catch(error){
 
-    toast(
-      "Payment নম্বর: " +
-      PAYMENT_NUMBER
+    console.error(error);
+
+    localStorage.removeItem(
+      "eCareRegistrationId"
     );
 
   }
 
 }
 
+/* =====================================================
+   START
+===================================================== */
 
-$("#copyPaymentNumber")
-  ?.addEventListener(
-    "click",
-    copyPaymentNumber
-  );
-
-
-$("#copyCoursePayment")
-  ?.addEventListener(
-    "click",
-    copyPaymentNumber
-  );
-
-
-/* =========================
-   EXISTING LOGIN RESTORE
-========================= */
-
-const existingLogin =
-  getLoggedIn();
-
-
-if(existingLogin){
-
-  updateAccountUI();
-
-
-  if(
-    existingLogin.course &&
-    existingLogin.paid !== 30
-  ){
-
-    setCourseFree(
-      existingLogin.course
-    );
-
-  }else{
-
-    setCourseFree(
-      "AI Web Development",
-      true
-    );
-
-    setCourseFree(
-      "Digital Marketing",
-      true
-    );
-
-  }
-
-}
-
-
-/* =========================
-   MENU
-========================= */
-
-$("#menuBtn")
-  ?.addEventListener(
-    "click",
-    () => {
-
-      const nav =
-        document.querySelector(
-          ".nav-actions"
-        );
-
-
-      if(!nav)
-        return;
-
-
-      nav.style.display =
-        nav.style.display === "flex"
-          ? "none"
-          : "flex";
-
-    }
-  );
-
-
-/* =========================
-   FINAL INITIALIZATION
-========================= */
-
-updateSerialDisplay();
-
-updateAccountUI();
+updateUI();
+loadExistingSession();
